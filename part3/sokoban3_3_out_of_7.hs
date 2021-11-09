@@ -3,7 +3,10 @@ import CodeWorld
 main :: Program
 type Program = IO ()
 
-main = runActivity (resettable (withStartScreen (Activity (S initialCoord initialDirection initialBoxes) handleEvent draw)))
+main = walk3
+
+walk3 :: IO()
+walk3 = resettableActivityOf my_world handleEvent drawState2
 
 -- bloki
 block, border, rect :: Picture
@@ -48,18 +51,10 @@ data Coord = C {
   coordY :: Integer
 } deriving (Eq)
 data State = S {
-  playerCoord :: Coord,
-  playerDir :: Direction,
-  boxCoords :: [Coord]
+  stCoord :: Coord,
+  stDir :: Direction,
+  boxCoords :: [Coord] 
 }
-
-data Activity world = Activity {
-  actState  :: world,
-  actHandle :: (Event -> world -> world),
-  actDraw   ::(world -> Picture)
-}
-
-data Level world = StartScreen | Running world
 
 type Maze = Coord -> Tile
 -- wprowadzone typy END
@@ -74,39 +69,6 @@ initialDirection = U
 initialBoxes :: [Coord]
 initialBoxes = [(C (-2) 0), (C (-1) 0), (C 0 0), (C 1 0)]
 -- inicjacja gracza END
-
--- straszne rzeczy
-
-runActivity :: Activity world -> IO()
-runActivity activity = activityOf (actState activity) (actHandle activity) (actDraw activity)
-
-startScreen :: Picture
-startScreen = scaled 3 3 (lettering "Sokoban!")
-
-winScreen :: Picture
-winScreen = scaled 3 3 (lettering "You Win!")
-
-withStartScreen :: Activity s -> Activity (Level s)
-withStartScreen (Activity state handle draw)
-  = Activity state' handle' draw'
-  where
-    state' = StartScreen
-
-    handle' (KeyPress key) StartScreen
-         | key == " "                  = Running state
-    handle' _              StartScreen = StartScreen
-    handle' e              (Running s) = Running (handle e s)
-
-    draw' StartScreen = startScreen
-    draw' (Running s) = draw s
-
-
-resettable :: Activity s -> Activity s
-resettable (Activity state handle draw)
-  = Activity state handle' draw
-  where handle' (KeyPress key) _ | key == "Esc" = state
-        handle' e s = handle e s
--- straszne rzeczy END
 
 atCoord :: Coord -> Picture -> Picture
 atCoord (C x y) pic = translated (fromIntegral x) (fromIntegral y) pic
@@ -141,27 +103,20 @@ pictureOfMaze :: State -> Picture
 pictureOfMaze s = pictures [translated (fromIntegral x) (fromIntegral y) (drawTile((addBoxes (boxCoords s) (removeBoxes maze) (C x y)) )) 
                           | x <- [-10..10], y <- [-10..10]]
      
-checkMove :: Coord -> State -> Direction -> Bool
-checkMove coord state dir = res where
-  tileToMove = addBoxes (boxCoords state) (removeBoxes maze) coord
-  tileForBoxMove = (addBoxes (boxCoords state) (removeBoxes maze)) (adjacentCoord dir coord)
-  res = if (tileToMove == Ground || tileToMove == Storage)
-  then True
-  else if (tileToMove == Box && (tileForBoxMove == Ground || tileForBoxMove == Storage))
-       then True
-       else False
+checkMove :: Coord -> State -> Bool
+checkMove c s = goodTile (addBoxes (boxCoords s) (removeBoxes maze) c)
+    
+goodTile :: Tile -> Bool
+goodTile t 
+  | t == Ground = True
+  | t == Storage = True
+  | otherwise = False
         
 makeMove :: Direction -> State -> State
 makeMove dir state = newState where
-  newCoord = adjacentCoord dir (playerCoord state)
-  res = checkMove newCoord state dir
-  newState = (if res then state {playerCoord = newCoord, playerDir = dir, boxCoords = (moveBox (boxCoords state) dir newCoord)} else state)
-  
-moveBox :: [Coord] -> Direction -> Coord -> [Coord]
-moveBox (h:t) dir newCoord 
-  | h == newCoord = (adjacentCoord dir h):t
-  | otherwise = h:(moveBox t dir newCoord)
-moveBox [] dir newCoord = []
+  newCoord = adjacentCoord dir (stCoord state)
+  res = checkMove newCoord state
+  newState = (if res then state {stCoord = newCoord, stDir = dir} else state)
 
 showDir :: Direction -> Double
 showDir U = 0
@@ -169,11 +124,8 @@ showDir D = pi
 showDir L = pi/2
 showDir R = 3*pi/2
 
-isWinning :: State -> Bool
-isWinning state = all (\x -> (maze x == Storage))(boxCoords state)
-
-draw :: State -> Picture
-draw s = if isWinning s then winScreen else (atCoord (playerCoord s) (player2 (playerDir s))) & pictureOfMaze s
+drawState2 :: State -> Picture
+drawState2 s = (atCoord (stCoord s) (player2 (stDir s))) & pictureOfMaze s
 
 adjacentCoord :: Direction -> Coord -> Coord
 adjacentCoord U c = C (coordX c) ((coordY c) + 1)
@@ -188,3 +140,19 @@ handleEvent (KeyPress key) s
     | key == "Left"  = makeMove L s
     | key == "Down"  = makeMove D s
 handleEvent _ s      = s
+
+-- Po puszczeniu klawisza "Esc" nic się nie dzieje.
+reset :: (Event -> world -> world) -> 
+          world ->
+          (Event -> world -> world)    
+reset handleEvent initialWorld (KeyPress key) resettableWorld
+     | key == "Esc" = initialWorld
+     | otherwise = handleEvent (KeyPress key) resettableWorld
+reset handleEvent initialWorld _ resettableWorld = resettableWorld
+
+resettableActivityOf ::
+    world ->
+    (Event -> world -> world) ->
+    (world -> Picture) ->
+    IO ()
+resettableActivityOf world handleEvent drawState = activityOf world (reset handleEvent world) drawState

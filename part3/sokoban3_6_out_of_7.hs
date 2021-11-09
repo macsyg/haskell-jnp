@@ -83,9 +83,6 @@ runActivity activity = activityOf (actState activity) (actHandle activity) (actD
 startScreen :: Picture
 startScreen = scaled 3 3 (lettering "Sokoban!")
 
-winScreen :: Picture
-winScreen = scaled 3 3 (lettering "You Win!")
-
 withStartScreen :: Activity s -> Activity (Level s)
 withStartScreen (Activity state handle draw)
   = Activity state' handle' draw'
@@ -169,11 +166,8 @@ showDir D = pi
 showDir L = pi/2
 showDir R = 3*pi/2
 
-isWinning :: State -> Bool
-isWinning state = all (\x -> (maze x == Storage))(boxCoords state)
-
 draw :: State -> Picture
-draw s = if isWinning s then winScreen else (atCoord (playerCoord s) (player2 (playerDir s))) & pictureOfMaze s
+draw s = (atCoord (playerCoord s) (player2 (playerDir s))) & pictureOfMaze s
 
 adjacentCoord :: Direction -> Coord -> Coord
 adjacentCoord U c = C (coordX c) ((coordY c) + 1)
@@ -188,3 +182,19 @@ handleEvent (KeyPress key) s
     | key == "Left"  = makeMove L s
     | key == "Down"  = makeMove D s
 handleEvent _ s      = s
+
+-- Po puszczeniu klawisza "Esc" nic się nie dzieje.
+reset :: (Event -> world -> world) -> 
+          world ->
+          (Event -> world -> world)    
+reset handleEvent initialWorld (KeyPress key) resettableWorld
+     | key == "Esc" = initialWorld
+     | otherwise = handleEvent (KeyPress key) resettableWorld
+reset handleEvent initialWorld _ resettableWorld = resettableWorld
+
+resettableActivityOf ::
+    world ->
+    (Event -> world -> world) ->
+    (world -> Picture) ->
+    IO ()
+resettableActivityOf world handleEvent drawState = activityOf world (reset handleEvent world) drawState
