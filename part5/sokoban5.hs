@@ -1,29 +1,18 @@
 {-# LANGUAGE OverloadedStrings #-}
-import qualified Data.Text as T
-import CodeWorld
+import System.IO
+import Data.List
 main :: Program
 type Program = IO ()
 
 main = etap5
 
-pictureOfBools :: [Bool] -> Picture
-pictureOfBools xs = translated (-fromIntegral k / 2) (fromIntegral k) (go 0 xs)
-  where n = length xs
-        k = findK 0 -- k is the integer square of n
-        findK i | i * i >= n = i
-                | otherwise  = findK (i+1)
-        go _ [] = blank
-        go i (b:bs) =
-          translated (fromIntegral (i `mod` k))
-                     (-fromIntegral (i `div` k))
-                     (pictureOfBool b)
-          & go (i+1) bs
+pictureOfBool :: Bool -> String
+pictureOfBool x
+  | x = "\ESC[30;42m "
+  | otherwise = "\ESC[30;41m "
 
-        pictureOfBool True =  colored green (solidCircle 0.4)
-        pictureOfBool False = colored red   (solidCircle 0.4)
-
-etap4 :: Picture
-etap4 = pictureOfBools (mapList isBoth (appendList mazes badMazes))
+levels :: [String]
+levels = mapList pictureOfBool (mapList isBoth (appendList mazes badMazes))
 
 etap5 :: IO()
 etap5 = runActivity (resettable (withUndo (withStartScreen (Activity initialState handleEvent draw))))
@@ -34,35 +23,29 @@ etap5 = runActivity (resettable (withUndo (withStartScreen (Activity initialStat
 --test = print (isSane fourthMaze)
 -- testy programu END
 
--- bloki
-block, border, rect :: Picture
-block = solidRectangle 1 1
-border = rectangle 1 1
-rect = colored (dark brown) (solidRectangle 0.1 0.9)
+-- bloki i gracz
 
-ground, wall, storage, box :: Picture
-ground = border & colored (light green) block
-wall = border & colored grey block
-storage = border & scaled 0.5 0.5 wall & ground
-box = scaled 0.8 0.8 (pictures [translated (0+x) 0 rect | x <- [-0.4, -0.2, 0, 0.2, 0.4]] 
-      & border 
-      & colored brown block) & ground
--- bloki END
+-- kolorowa wersja
+-- ground, wall, storage, box, player, blank :: String
+-- ground = "\ESC[92;40mo"
+-- wall = "\ESC[30;47m#"
+-- storage = "\ESC[33;40m."
+-- box = "\ESC[33;40mo"
+-- player = "\ESC[31;40mo"
+-- blank = "\ESC[30;40m "
+-- kolorowa wersja END
 
--- gracz
-player1 :: Picture
-player2 :: Direction -> Picture
-player_head, player_hand :: Picture
+-- niekolorowa wersja
+ground, wall, storage, box, player, blank :: String
+ground = " "
+wall = "x"
+storage = "."
+box = "o"
+player = "@"
+blank = " "
+-- niekolorowa wersja END
 
-player_head = colored yellow (solidCircle 0.2)
-player_hand = colored red (solidRectangle 0.1 0.4)
-
-player1 = player_head 
-          & (translated (-0.25) (0.1) player_hand) 
-          & (translated (0.25) (0.1) player_hand)
-
-player2 dir = rotated (showDir dir) player1 
--- gracz END
+-- bloki i gracz END
 
 -- stan gry
 initialState :: State
@@ -181,7 +164,7 @@ data State = S {
 data Activity world = Activity {
   actState  :: world,
   actHandle :: (Event -> world -> world),
-  actDraw   :: (world -> Picture)
+  actDraw   :: (world -> Screen)
 } 
 
 data Level world = StartScreen | Running world deriving Eq
@@ -192,6 +175,14 @@ data Maze = Maze {
 }
 
 data WithUndo a = WithUndo a [a]
+
+data Event = KeyPress String
+
+type DrawFun = Coord -> String
+type Picture = DrawFun -> DrawFun
+type Screen = String
+(&) = (.)
+
 -- wprowadzone typy END
 
 -- inicjaca gracza
@@ -201,16 +192,27 @@ initialDirection = U
 
 -- wszystkie aktywności
 runActivity :: Activity world -> IO()
-runActivity activity = activityOf (actState activity) (actHandle activity) (actDraw activity)
+runActivity (Activity state handle draw) = do
+    hSetBuffering stdin NoBuffering
+    hSetBuffering stdout NoBuffering
+    putStr "\ESCc\ESC[?25l"
+    putStr $ (draw state) 
+    go state where
+        go oldState = do
+            input <- getChar
+            putStr "\ESCc\ESC[?25l"
+            let state' = handle (KeyPress [input]) oldState
+            putStr (draw state')
+            go state'
 
-startScreen :: Picture
-startScreen = scaled 2 2 (lettering "Sokoban!") & translated 0 (-4) etap4
+startScreen :: Screen
+startScreen = "Sokoban!\n" ++ (intercalate "\ESC[0m " levels) ++ "\ESC[0m "
 
-winScreen :: State -> Picture
+winScreen :: State -> Screen
 winScreen state = res where 
-  output = scaled 1 1 (lettering ("Poziom ukończony, liczba ruchów:" <> (T.pack (show (numOfMoves state)))) )
-  additional = if levelNumber state == numberOfMazes then translated (0) (-2) (scaled 1 1 (lettering ("Koniec Gry"))) else blank
-  res = output & additional
+  output = "Poziom ukończony, liczba ruchów:" ++ show (numOfMoves state)
+  additional = if levelNumber state == numberOfMazes then "\nKoniec Gry" else ""
+  res = output ++ additional
 
 withStartScreen :: Eq s => Activity s -> Activity (Level s)
 withStartScreen (Activity state handle draw)
@@ -230,13 +232,13 @@ withStartScreen (Activity state handle draw)
 resettable :: Activity s -> Activity s
 resettable (Activity state handle draw)
   = Activity state handle' draw
-  where handle' (KeyPress key) _ | key == "Esc" = state
+  where handle' (KeyPress key) _ | key == "\ESC" = state
         handle' e s = handle e s
 
 withUndo :: Eq s => Activity s -> Activity (WithUndo s)
 withUndo (Activity s handle draw) = Activity s' handle' draw' where
     s' = WithUndo s []
-    handle' (KeyPress key) (WithUndo s stack) | key == "U"
+    handle' (KeyPress key) (WithUndo s stack) | key == "U" || key == "u"
       = case stack of s':stack' -> WithUndo s' stack'
                       []        -> WithUndo s []
     handle' e              (WithUndo s stack)
@@ -256,23 +258,20 @@ handleEvent (KeyPress key) s
                         else s
                    else s
     | isWinning s = s
-    | key == "N" = if levelNumber s < numberOfMazes 
+    | key == "N" || key == "n" = if levelNumber s < numberOfMazes 
                       then s{ playerCoord = startCoord (nth mazes (levelNumber s + 1)), 
                               boxCoords = (getBoxCoords (nth mazes (levelNumber s + 1))),
                               levelNumber = (levelNumber s + 1),
                               numOfMoves = 0}
                       else s
-    | key == "Right" = makeMove R s
-    | key == "Up"    = makeMove U s
-    | key == "Left"  = makeMove L s
-    | key == "Down"  = makeMove D s
+    | key == "D" || key == "d" = makeMove R s
+    | key == "W" || key == "w"   = makeMove U s
+    | key == "A" || key == "a"  = makeMove L s
+    | key == "S" || key == "s"  = makeMove D s
 handleEvent _ s      = s    
 -- wszystkie aktywności END
 
-atCoord :: Coord -> Picture -> Picture
-atCoord (C x y) pic = translated (fromIntegral x) (fromIntegral y) pic
-
-drawTile :: Tile -> Picture
+drawTile :: Tile -> String
 drawTile Wall    = wall
 drawTile Ground  = ground
 drawTile Storage = storage
@@ -288,16 +287,6 @@ addBoxes :: [Coord] -> (Coord -> Tile) -> (Coord -> Tile)
 addBoxes boxList whichTile c 
   | c `elem` boxList = Box
   | otherwise = whichTile c
-  
-  
-pictureOfMaze :: State -> Picture
-pictureOfMaze state = res where 
-  coord = startCoord (nth mazes (levelNumber state))
-  reachableVertices = ((allReachableVertices (reachableNeighbours (getMazeDescription state))) coord [])
-  (maxX, minX) = foldList findXSize (coordX coord, coordX coord) reachableVertices
-  (maxY, minY) = foldList findYSize (coordY coord, coordY coord) reachableVertices
-  res = pictures [translated (fromIntegral x) (fromIntegral y) (drawTile((addBoxes (boxCoords state) (removeBoxes (getMazeDescription state)) (C x y)) )) 
-                          | x <- [(minX-1)..(maxX+1)], y <- [(minY-1)..(maxY+1)]]  
   
 findXSize :: Coord -> (Integer, Integer) -> (Integer, Integer)
 findXSize coord acc 
@@ -333,12 +322,6 @@ moveBox (h:t) dir newCoord
   | otherwise = h:(moveBox t dir newCoord)
 moveBox [] dir newCoord = []
 
-showDir :: Direction -> Double
-showDir U = 0
-showDir D = pi
-showDir L = pi/2
-showDir R = 3*pi/2
-
 getMazeDescription :: State -> (Coord -> Tile)
 getMazeDescription state = coordToTile (nth mazes (levelNumber state))
 
@@ -347,8 +330,35 @@ isWinning state = res where
   whichTile = getMazeDescription state
   res = all (\x -> (whichTile x == Storage))(boxCoords state)
 
-draw :: State -> Picture
-draw s = if isWinning s then winScreen s else (atCoord (playerCoord s) (player2 (playerDir s))) & pictureOfMaze s
+draw :: State -> Screen
+draw s = if isWinning s then winScreen s else drawBoard s
+
+drawCoord :: (Tile -> String) -> (Coord -> Tile) -> Coord -> String
+drawCoord tileToStringFun coordToTileFun coord = tileToStringFun (coordToTileFun coord)
+
+adjust :: Integer -> Integer -> DrawFun -> DrawFun
+adjust movX movY fun (C x y) = fun (C (x+movX-1) (y+movY-1)) 
+
+addPlayer :: Coord -> DrawFun -> DrawFun
+addPlayer playerCoord fun (C x y)
+    | coordX playerCoord == x && coordY playerCoord == y = player
+    | otherwise = fun (C x y)
+
+verticalFlip :: Integer -> DrawFun -> DrawFun
+verticalFlip sizeY fun (C x y) = fun (C x (sizeY-y+1))
+
+drawBoard :: State -> Screen
+drawBoard state = res where 
+    coord = startCoord (nth mazes (levelNumber state))
+    pCoord = playerCoord state
+    maze = addBoxes (boxCoords state) (removeBoxes (getMazeDescription state))
+    reachableVertices = ((allReachableVertices (reachableNeighbours (getMazeDescription state))) coord [])
+    (maxX, minX) = foldList findXSize (coordX coord, coordX coord) reachableVertices
+    (maxY, minY) = foldList findYSize (coordY coord, coordY coord) reachableVertices
+    basicScreen = drawCoord drawTile maze
+    res = intercalate "" [if x<80 then ((verticalFlip (maxY-minY+1))((adjust minX minY)((addPlayer pCoord) basicScreen))) (C x y) else "\n" 
+                            | y <- [0..23], x <- [0..80]]
+
 
 adjacentCoord :: Direction -> Coord -> Coord
 adjacentCoord U c = C (coordX c) ((coordY c) + 1)
