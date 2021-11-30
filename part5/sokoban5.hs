@@ -4,7 +4,7 @@ import Data.List
 main :: Program
 type Program = IO ()
 
-main = etap5
+main = runActivity (resettable (withUndo (withStartScreen (Activity initialState handleEvent draw))))
 
 pictureOfBool :: Bool -> String
 pictureOfBool x
@@ -13,9 +13,6 @@ pictureOfBool x
 
 levels :: [String]
 levels = mapList pictureOfBool (mapList isBoth (appendList mazes badMazes))
-
-etap5 :: IO()
-etap5 = runActivity (resettable (withUndo (withStartScreen (Activity initialState handleEvent draw))))
 
 -- testy programu
 --test = print (isGraphClosed (startCoord firstMaze) reachableNeighbours (okVertex firstMaze))
@@ -29,20 +26,24 @@ etap5 = runActivity (resettable (withUndo (withStartScreen (Activity initialStat
 -- ground, wall, storage, box, player, blank :: String
 -- ground = "\ESC[92;40mo"
 -- wall = "\ESC[30;47m#"
--- storage = "\ESC[33;40m."
+-- storage = "\ESC[93;40m."
 -- box = "\ESC[33;40mo"
 -- player = "\ESC[31;40mo"
--- blank = "\ESC[30;40m "
+-- blank = "\ESC[0m "
+-- boxOnStorage = "\ESC[93;40mo"
+-- lastBlank = ""
 -- kolorowa wersja END
 
 -- niekolorowa wersja
 ground, wall, storage, box, player, blank :: String
 ground = " "
-wall = "x"
+wall = "#"
 storage = "."
-box = "o"
+box = "$"
 player = "@"
 blank = " "
+boxOnStorage = "*"
+lastBlank = ""
 -- niekolorowa wersja END
 
 -- bloki i gracz END
@@ -190,20 +191,56 @@ initialDirection :: Direction
 initialDirection = U
 -- inicjacja gracza END
 
+
+arrowChars :: [Char]
+arrowChars = ['A', 'B', 'C', 'D']
+
+mapChars :: Char -> Char
+mapChars oldChar
+  | oldChar == 'A' = 'W'
+  | oldChar == 'B' = 'S'
+  | oldChar == 'C' = 'D'
+  | otherwise = 'A'
+
+newPair :: (Integer, Char) -> (Integer, Char)
+newPair (oldVal, oldChar)
+  | oldVal == 0 && oldChar == '\ESC' = (oldVal+1, oldChar)
+  | oldVal == 1 && oldChar == '[' = (oldVal+1, oldChar)
+  | oldVal == 2 && elemList oldChar arrowChars = (0, mapChars oldChar)
+  | otherwise = (0, oldChar)
+
 -- wszystkie aktywności
 runActivity :: Activity world -> IO()
 runActivity (Activity state handle draw) = do
     hSetBuffering stdin NoBuffering
     hSetBuffering stdout NoBuffering
     putStr "\ESCc\ESC[?25l"
-    putStr $ (draw state) 
-    go state where
-        go oldState = do
+    putStr (draw state) 
+    go (0, state) where
+        go (oldVal, oldState) = do
             input <- getChar
+            let (newVal, input') = newPair (oldVal, input)
+            let state' = if newVal == 0
+                         then handle (KeyPress [input']) oldState
+                         else oldState
             putStr "\ESCc\ESC[?25l"
-            let state' = handle (KeyPress [input]) oldState
             putStr (draw state')
-            go state'
+            go (newVal, state')
+
+-- same litery
+-- runActivity :: Activity world -> IO()
+-- runActivity (Activity state handle draw) = do
+--     hSetBuffering stdin NoBuffering
+--     hSetBuffering stdout NoBuffering
+--     putStr "\ESCc\ESC[?25l"
+--     putStr $ (draw state) 
+--     go state where
+--         go oldState = do
+--             input <- getChar
+--             let state' = handle (KeyPress [input]) oldState
+--             putStr "\ESCc\ESC[?25l"
+--             putStr (draw state')
+--             go state'
 
 startScreen :: Screen
 startScreen = "Sokoban!\n" ++ (intercalate "\ESC[0m " levels) ++ "\ESC[0m "
@@ -232,7 +269,7 @@ withStartScreen (Activity state handle draw)
 resettable :: Activity s -> Activity s
 resettable (Activity state handle draw)
   = Activity state handle' draw
-  where handle' (KeyPress key) _ | key == "\ESC" = state
+  where handle' (KeyPress key) _ | key == "R" || key == "r" = state
         handle' e s = handle e s
 
 withUndo :: Eq s => Activity s -> Activity (WithUndo s)
@@ -347,6 +384,16 @@ addPlayer playerCoord fun (C x y)
 verticalFlip :: Integer -> DrawFun -> DrawFun
 verticalFlip sizeY fun (C x y) = fun (C x (sizeY-y+1))
 
+isBoxOnStorage :: [Coord] -> (Coord->Tile) -> DrawFun -> DrawFun
+isBoxOnStorage boxList maze fun (C x y)
+  | elemList (C x y) boxList && maze (C x y) == Storage = boxOnStorage
+  | otherwise = fun (C x y)
+
+isXTooLarge :: Integer -> DrawFun -> DrawFun
+isXTooLarge valX fun (C x y)
+  | x - 2 > valX = lastBlank
+  | otherwise = fun (C x y)
+
 drawBoard :: State -> Screen
 drawBoard state = res where 
     coord = startCoord (nth mazes (levelNumber state))
@@ -356,9 +403,15 @@ drawBoard state = res where
     (maxX, minX) = foldList findXSize (coordX coord, coordX coord) reachableVertices
     (maxY, minY) = foldList findYSize (coordY coord, coordY coord) reachableVertices
     basicScreen = drawCoord drawTile maze
-    res = intercalate "" [if x<80 then ((verticalFlip (maxY-minY+1))((adjust minX minY)((addPlayer pCoord) basicScreen))) (C x y) else "\n" 
-                            | y <- [0..23], x <- [0..80]]
+    modifyScreen = (verticalFlip (maxY-minY+1))&
+                   (adjust minX minY)&
+                   (isXTooLarge maxX)&
+                   (isBoxOnStorage (boxCoords state) (getMazeDescription state))&
+                   (addPlayer pCoord)
+    res = (intercalate "" [if x<80 then (modifyScreen basicScreen) (C x y) else "\n" 
+                            | y <- [0..(min 23 (maxY-minY+2))], x <- [0..80]]) ++ "\ESC[?25h"
 
+--((verticalFlip (maxY-minY+1))((adjust minX minY)((addPlayer pCoord) basicScreen)))
 
 adjacentCoord :: Direction -> Coord -> Coord
 adjacentCoord U c = C (coordX c) ((coordY c) + 1)
