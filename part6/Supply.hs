@@ -5,10 +5,15 @@ infixr 5 :>
 data Stream a = a :> (Stream a)
 
 streamToList :: Stream a -> [a]
-streamToList = undefined
+streamToList (x:>xs) = x : (streamToList xs)
 
 instance Show a => Show (Stream  a) where
-  show = undefined
+  show s = showLoop 20 s
+
+showLoop n (x:>xs)
+  | n > 0 = show x ++ "," ++ showLoop (n-1) xs
+  | otherwise = "..."
+
 
 rep :: a -> Stream a
 rep a = a :> rep a
@@ -41,27 +46,29 @@ instance Functor Stream where
   fmap f (x:>xs) = f x :> fmap f xs 
 
 -- | Example:
---
+
 -- >>> fmap (+1) nats
 -- 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,...
 
 instance Applicative Stream where
-  pure  = repeat
-  (<*>) = zipWith ($)
+  pure a  = rep a
+  (<*>) (f:>fs) (x:>xs) = (f x) :> (<*>) fs xs -- źle
 -- | Example:
---
+
 -- >>> pure (+1) <*> nats
 -- 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,...
 
 -- | Should satisfy:
---
---- >>> show (pure (*2) <*> nats) == show (fmap (*2) nats)
+
+-- - >>> show (pure (*2) <*> nats) == show (fmap (*2) nats)
 -- True
 
 newtype Supply s a = S { runSupply :: Stream s -> (a, Stream s) }
 
 get :: Supply s s
-get = undefined
+get = S getElem -- ??? 
+
+getElem (x:>xs) = (x, xs)
 
 -- | Example:
 --
@@ -78,7 +85,7 @@ pureSupply a = undefined
 
 mapSupply :: (a->b) -> Supply s a -> Supply s b
 mapSupply f (S g) = S h where
-  h s = undefined
+  h s = (f (fst (g s)), snd (g s)) -- ???
 
 -- | Example:
 --
@@ -87,11 +94,11 @@ mapSupply f (S g) = S h where
 
 mapSupply2 :: (a->b->c) -> Supply s a -> Supply s b -> Supply s c
 mapSupply2 f (S ga) (S gb) = S gc where
-  gc s = undefined
+  gc s = (f ga gb) s -- źle
 
 bindSupply :: Supply s a -> (a->Supply s b) -> Supply s b
 bindSupply (S fa) k = S fb where
-  fb s = undefined
+  fb s = k (fst (fa s)) -- ???
 
 instance Functor (Supply s) where
   fmap = mapSupply
@@ -105,6 +112,9 @@ instance Monad (Supply s) where
 
 evalSupply :: Supply s a -> Stream s -> a
 evalSupply p s = fst $ runSupply p s
+
+-- evalSupply2 :: Supply s a -> Stream s -> Stream s
+-- evalSupply2 p s = snd $ runSupply p s
 
 -- | Example:
 --
